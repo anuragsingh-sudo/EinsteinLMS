@@ -1,0 +1,365 @@
+<script>
+    // ==========================================
+    // 1. API BRIDGE
+    // ==========================================
+    async function postData(url, data) {
+        try {
+            const response = await fetch(url, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(data),
+            });
+            return await response.json();
+        } catch (error) {
+            console.error("API Error:", error);
+            return {status: 'error', message: 'Connection Failed'};
+        }
+    }
+
+    const google = {
+        script: {
+            run: {
+                withSuccessHandler: function(onSuccess) {
+                    return {
+                        loginUser: async (email, password) => { onSuccess(await postData('/api/login', {email, password})); },
+                        getMyBatches: async (userId, role) => { onSuccess(await postData('/api/get_batches', {userId, role})); },
+                        getAllTrainers: async () => { onSuccess(await fetch('/api/get_trainers').then(r => r.json())); },
+                        createBatch: async (data) => { onSuccess(await postData('/api/create_batch', data)); },
+                        getTraineesByBatch: async (batchCode) => { onSuccess(await postData('/api/get_trainees', {batchCode})); },
+                        saveAttendance: async (data) => { onSuccess(await postData('/api/save_attendance', data)); },
+                        addSingleTrainee: async (data) => { onSuccess(await postData('/api/add_trainee', data)); },
+                        getTraineeDetails: async (id) => { onSuccess(await postData('/api/get_trainee_details', {id})); },
+                        
+                        // --- NEW: Assessment API Connections ---
+                        getTestSetupData: async (modIdx) => { onSuccess(await postData('/api/get_test_setup', {moduleIndex: modIdx})); },
+                        saveAssessmentResult: async (tId, tName, mNum, vData, aData) => { onSuccess(await postData('/api/save_assessment', {tId, tName, mNum, vData, aData})); }
+                    };
+                }
+            }
+        }
+    };
+
+    // ==========================================
+    // 2. MAIN APP LOGIC
+    // ==========================================
+    const initMode = window.SERVER_MODE; 
+    const initEmail = window.SERVER_EMAIL;
+    let currUser = null, currTraineeId = null, currModIndex = null, currentBatchForAdd = null;
+
+    window.onload = function() {
+        const d = document.getElementById('a_date'); if(d) d.valueAsDate = new Date();
+        if(initMode === 'setup' && initEmail) {
+            document.getElementById('setupForm').classList.remove('hidden');
+            document.getElementById('loginForm').classList.add('hidden');
+            document.getElementById('s_email_display').innerText = initEmail;
+        }
+    };
+
+    function toast(m, err=false) {
+        const t = document.getElementById('toast');
+        t.innerText = m;
+        t.style.borderLeftColor = err ? '#ef4444' : '#3b82f6';
+        t.className = 'show';
+        setTimeout(() => t.className = '', 3000);
+    }
+
+    function setLoading(btnId, loading) {
+        const b = document.getElementById(btnId);
+        if(!b) return;
+        if(loading) { b.dataset.txt=b.innerText; b.innerText="Processing..."; b.disabled=true; }
+        else { b.innerText=b.dataset.txt||"Submit"; b.disabled=false; }
+    }
+
+    function nav(v, el) {
+        if(el) { document.querySelectorAll('.nav-item').forEach(n=>n.classList.remove('active')); el.classList.add('active'); }
+        document.querySelectorAll('.lms-main > div').forEach(d=>d.classList.add('hidden'));
+        const target = document.getElementById('v_'+v);
+        if(target) target.classList.remove('hidden');
+        
+        if(v==='dash') loadDash();
+        if(v==='att') loadDrop('a_sel');
+        if(v==='users') { loadDrop('t_sel'); closeProfile(); }
+        if(v==='create' && currUser.role==='Owner') loadTrainers();
+    }
+
+    function doLogin() {
+        setLoading('loginBtn', true);
+        google.script.run.withSuccessHandler(r => {
+            setLoading('loginBtn', false);
+            if(r.status==='error') toast(r.message, true);
+            else { currUser=r.user; enterApp(); }
+        }).loginUser(document.getElementById('l_email').value, document.getElementById('l_pass').value);
+    }
+
+    function enterApp() {
+        document.getElementById('authSection').style.display='none';
+        document.getElementById('appInterface').style.display='flex';
+        document.getElementById('u_name').innerText = currUser.name;
+        document.getElementById('u_role').innerText = currUser.role;
+        if(currUser.role === 'Owner') document.getElementById('nav-add-trainer').classList.remove('hidden');
+        nav('dash');
+    }
+
+    // --- DASHBOARD ---
+    function loadDash() {
+        google.script.run.withSuccessHandler(b => {
+            document.getElementById('d_count').innerText = b.length;
+            document.getElementById('d_list').innerHTML = b.length ? b.map(x => 
+                `<div style="display:flex; justify-content:space-between; align-items:center; padding:20px; border-bottom:1px solid #f1f5f9;">
+                    <div>
+                        <div style="font-weight:700; font-size:16px; color:#0f172a;">${x.name}</div>
+                        <div style="font-size:12px; color:#64748b; margin-top:4px;">
+                            Code: <span style="font-family:monospace; background:#e2e8f0; padding:2px 6px; border-radius:4px;">${x.code}</span>
+                            <span style="margin:0 8px;">•</span> 
+                            Started: ${x.start}
+                        </div>
+                    </div>
+                    <button onclick="openAddTrainee('${x.code}')" style="background:#dbeafe; color:#2563eb; border:none; padding:8px 16px; border-radius:8px; font-weight:600; font-size:13px; cursor:pointer; transition:0.2s;">
+                        + Add Student
+                    </button>
+                </div>`
+            ).join('') : '<div style="padding:40px; text-align:center;">No batches found.</div>';
+        }).getMyBatches(currUser.id, currUser.role);
+    }
+
+    function openAddTrainee(code) {
+        currentBatchForAdd = code;
+        document.getElementById('add-trainee-modal').classList.remove('hidden');
+        document.getElementById('at_name').value = '';
+        document.getElementById('at_mobile').value = '';
+        document.getElementById('at_email').value = '';
+    }
+
+    function saveNewTrainee() {
+        const name = document.getElementById('at_name').value;
+        const mobile = document.getElementById('at_mobile').value;
+        const email = document.getElementById('at_email').value;
+        if(!name) return toast("Name is required", true);
+        setLoading('at_btn', true);
+        const data = { batchCode: currentBatchForAdd, name: name, mobile: mobile, email: email };
+        google.script.run.withSuccessHandler((r) => {
+            setLoading('at_btn', false);
+            if(r.status === 'error') { toast(r.message, true); } 
+            else { toast("Student Added!"); document.getElementById('add-trainee-modal').classList.add('hidden'); }
+        }).addSingleTrainee(data);
+    }
+
+    // --- TRAINEES & PROFILE ---
+    function loadTList() {
+        const bc = document.getElementById('t_sel').value;
+        if(!bc) return;
+        google.script.run.withSuccessHandler(l => {
+            document.getElementById('t_list').innerHTML = l.map(t => 
+                `<div style="display:flex; justify-content:space-between; padding:15px; border-bottom:1px solid #eee; align-items:center;">
+                    <b>${t.name}</b>
+                    <button onclick="viewProfile('${t.id}')" style="background:#e2e8f0; border:none; padding:6px 12px; border-radius:6px; cursor:pointer;">View</button>
+                </div>`
+            ).join('');
+        }).getTraineesByBatch(bc);
+    }
+
+    function viewProfile(id) {
+        currTraineeId = id;
+        document.getElementById('t_search').classList.add('hidden');
+        document.getElementById('t_profile').classList.remove('hidden');
+        document.getElementById('p_action').classList.add('hidden');
+        
+        google.script.run.withSuccessHandler(res => {
+            document.getElementById('p_name').innerText = res.info.name;
+            document.getElementById('p_id').innerText = res.info.id;
+            document.getElementById('p_av').innerText = res.info.name.charAt(0);
+            document.getElementById('p_pct').innerText = res.stats.percentage + '%';
+            
+            const structure = res.curriculum || [];
+            let html = '';
+            if (structure.length === 0) {
+                html = '<div style="padding:20px; text-align:center; color:#94a3b8;">No curriculum defined.</div>';
+            } else {
+                structure.forEach((cat, idx) => {
+                    const catId = `cat_${idx}`;
+                    html += `<div class="cat-header" onclick="toggleCategory('${catId}', this)"><span>${cat.name}</span><span class="cat-icon">+</span></div>`;
+                    html += `<div id="${catId}" class="cat-content"><div class="cat-grid">`;
+                    cat.modules.forEach(modNum => {
+                        const modData = res.modules[modNum];
+                        let style = ''; let text = 'Start'; let icon = '🔒'; let attemptsText = '';
+                        if (modData) {
+                            if (modData.score === "Pending") { style = 'background:#fff7ed; border-color:#fdba74; color:#c2410c;'; text = 'Pending'; icon = '⏳'; attemptsText = `<div style="font-size:9px; opacity:0.7">(${modData.attempts} Tries)</div>`; } 
+                            else { style = 'background:#f0fdf4; border-color:#86efac; color:#15803d; font-weight:bold;'; text = 'Avg: ' + modData.score; icon = '✅'; attemptsText = `<div style="font-size:9px; opacity:0.7">(${modData.attempts} Tries)</div>`; }
+                        }
+                        html += `<div class="module-box" style="${style}" onclick="clickModule(${modNum},'${text}',this)"><div style="font-size:20px;">${icon}</div><div style="font-weight:600; font-size:13px;">Mod ${modNum}</div><div style="font-size:11px; opacity:0.8; margin-top:2px;">${text}</div>${attemptsText}</div>`;
+                    });
+                    html += `</div></div>`;
+                });
+            }
+            document.getElementById('p_curriculum').innerHTML = html;
+        }).getTraineeDetails(id);
+    }
+
+    function toggleCategory(id, header) {
+        const content = document.getElementById(id);
+        const icon = header.querySelector('.cat-icon');
+        header.classList.toggle('active-cat');
+        if (content.style.maxHeight) { content.style.maxHeight = null; icon.innerText = "+"; icon.style.transform = "rotate(0deg)"; } 
+        else { content.style.maxHeight = content.scrollHeight + "px"; icon.innerText = "+"; icon.style.transform = "rotate(45deg)"; }
+    }
+
+    function clickModule(i, s, el) {
+        document.querySelectorAll('.module-box').forEach(b => b.classList.remove('active'));
+        el.classList.add('active');
+        currModIndex = i;
+        document.getElementById('p_action').classList.remove('hidden');
+        document.getElementById('act_title').innerText = `Module ${i}`;
+        document.getElementById('act_status').innerText = `Status: ${s}`;
+    }
+
+    function closeProfile() {
+        document.getElementById('t_profile').classList.add('hidden');
+        document.getElementById('t_search').classList.remove('hidden');
+    }
+
+    // --- UTILS ---
+    function loadTrainers() { google.script.run.withSuccessHandler(l => { document.getElementById('owner-trainer-select').classList.remove('hidden'); document.getElementById('c_trainer').innerHTML = l.map(t => `<option value="${t.id}">${t.name}</option>`).join(''); }).getAllTrainers(); }
+    function genRows() { let h = ''; const count = document.getElementById('c_cap').value; const safeCount = count > 0 ? count : 0; for(let i = 0; i < safeCount; i++) { h += `<div style="display:flex; gap:10px; margin-bottom:10px;"><input class="t-n lms-input" placeholder="Name" style="margin:0; flex:1;"><input class="t-m lms-input" placeholder="Mobile" style="margin:0; flex:1;"></div>`; } document.getElementById('c_preview').innerHTML = h; }
+    function subBatch() { setLoading('createBatchBtn', true); const t=[]; document.querySelectorAll('#c_preview > div').forEach(d=>{ const n=d.querySelector('.t-n').value; if(n) t.push({name:n, mobile:d.querySelector('.t-m').value}); }); const tid = currUser.role==='Owner' ? document.getElementById('c_trainer').value : currUser.id; const d = { batch_code: 'B-'+Math.floor(Math.random()*9999), batch_name: document.getElementById('c_name').value, trainer_id: tid, start_date: document.getElementById('c_start').value, end_date: document.getElementById('c_end').value, max_capacity: t.length, trainees: t }; google.script.run.withSuccessHandler(() => { toast("Batch Created"); setLoading('createBatchBtn', false); nav('dash'); }).createBatch(d); }
+    function loadDrop(id) { google.script.run.withSuccessHandler(l => { document.getElementById(id).innerHTML = '<option value="">Select Batch...</option>' + l.map(b => `<option value="${b.code}">${b.name}</option>`).join(''); }).getMyBatches(currUser.id, currUser.role); }
+    function loadAttList() { const bc = document.getElementById('a_sel').value; if(!bc) return; google.script.run.withSuccessHandler(l => { document.getElementById('a_list').innerHTML = l.map(t => `<div style="display:flex; justify-content:space-between; padding:12px; border-bottom:1px solid #eee;"><b>${t.name}</b><div><label style="margin-right:10px"><input type="radio" name="${t.id}" value="P" checked> P</label><label><input type="radio" name="${t.id}" value="A"> A</label></div></div>`).join(''); document.getElementById('a_btn').classList.remove('hidden'); }).getTraineesByBatch(bc); }
+    function subAtt() { setLoading('a_btn', true); const r = Array.from(document.querySelectorAll('#a_list input:checked')).map(i => ({trainee_id:i.name, status:i.value})); google.script.run.withSuccessHandler(() => { toast("Saved!"); setLoading('a_btn', false); nav('dash'); }).saveAttendance({ batch_code:document.getElementById('a_sel').value, date:document.getElementById('a_date').value, records:r }); }
+
+    // ==========================================
+    // 3. ASSESSMENT LOGIC (RESTORED)
+    // ==========================================
+    let asmQ=[], asmIdx=0, micSt, camSt, medRec, audCh=[], audBl, camRec, camCh=[];
+
+    function startAssessmentFlow() {
+        document.getElementById('v_assessment').classList.remove('hidden');
+        checkPerms();
+    }
+
+    async function checkPerms() {
+        try {
+            // Request permissions
+            camSt = await navigator.mediaDevices.getUserMedia({video:true});
+            micSt = await navigator.mediaDevices.getUserMedia({audio:true});
+            
+            // Show video feed
+            const vidContainer = document.getElementById('video-container');
+            if (vidContainer) vidContainer.classList.remove('hidden');
+            
+            const vidElement = document.getElementById('video-feed');
+            if (vidElement) vidElement.srcObject = camSt;
+            
+            runAsm();
+        } catch(e) { 
+            console.error(e);
+            alert("Camera & Mic required. Please allow permissions."); 
+            exitAssessment(); 
+        }
+    }
+
+    function runAsm() {
+        google.script.run.withSuccessHandler(r => {
+            asmQ = r.questions; asmIdx = 0; loadQ();
+        }).getTestSetupData(currModIndex);
+    }
+
+    function loadQ() {
+        if (!asmQ || asmQ.length === 0) return;
+        const q = asmQ[asmIdx];
+        document.getElementById('asm-q-text').innerText = q.question;
+        const submitBtn = document.getElementById('asm-submit-btn');
+        submitBtn.disabled = true;
+        submitBtn.style.opacity = '0.5';
+    }
+
+    function toggleRecording() {
+        const btn = document.getElementById('asm-rec-btn');
+        const statusText = document.getElementById('rec-status-text');
+        
+        if(medRec && medRec.state==='recording') {
+            // STOP Recording
+            medRec.stop();
+            btn.innerText = "🎤"; 
+            btn.style.background="#fee2e2"; 
+            btn.style.color="#ef4444"; 
+            btn.style.borderColor="#ef4444";
+            statusText.innerText = "Click to Re-Record";
+        } else {
+            // START Recording
+            audCh=[]; 
+            // Note: We record only audio here for the answer, 
+            // but we keep the camera running for proctoring (simulation)
+            medRec = new MediaRecorder(micSt);
+            
+            medRec.ondataavailable = e => audCh.push(e.data);
+            medRec.onstop = () => {
+                audBl = new Blob(audCh, {type:'audio/webm'});
+                const p = document.getElementById('asm-audio-preview');
+                p.src = URL.createObjectURL(audBl); 
+                p.classList.remove('hidden');
+                
+                // Enable Submit
+                const submitBtn = document.getElementById('asm-submit-btn');
+                submitBtn.disabled = false;
+                submitBtn.style.opacity = '1';
+            };
+            medRec.start();
+            
+            btn.innerText = "⏹"; 
+            btn.style.background="#dcfce7"; 
+            btn.style.color="#16a34a"; 
+            btn.style.borderColor="#16a34a";
+            statusText.innerText = "Recording...";
+        }
+    }
+
+    function finishAssessment() {
+        const btn = document.getElementById('asm-submit-btn');
+        btn.innerHTML = "Uploading..."; btn.disabled = true;
+
+        // Simulate video capture (proctoring snapshot)
+        camCh=[]; 
+        try {
+            camRec = new MediaRecorder(camSt);
+            camRec.ondataavailable = e => camCh.push(e.data);
+            camRec.start();
+            setTimeout(() => camRec.stop(), 1000); // Record 1 second of video as 'proof'
+        } catch(e) { console.log("Video rec error", e); }
+
+        setTimeout(() => {
+            // Prepare Data (Mocking Base64 conversion for this example)
+            const reader = new FileReader();
+            reader.readAsDataURL(audBl);
+            reader.onloadend = () => {
+                const base64Audio = reader.result.split(',')[1];
+                
+                google.script.run.withSuccessHandler(() => {
+                    toast("Uploaded Successfully!");
+                    exitAssessment();
+                    // Refresh Profile
+                    viewProfile(currTraineeId);
+                    btn.innerText = "Submit & Upload";
+                }).saveAssessmentResult(
+                    currTraineeId, 
+                    document.getElementById('p_name').innerText, 
+                    currModIndex, 
+                    {data: "mock_video_base64"}, 
+                    {data: base64Audio}
+                );
+            };
+        }, 1500);
+    }
+
+    function exitAssessment() {
+        document.getElementById('v_assessment').classList.add('hidden');
+        document.getElementById('video-container').classList.add('hidden');
+        
+        // Stop all streams
+        if(camSt) camSt.getTracks().forEach(t=>t.stop());
+        if(micSt) micSt.getTracks().forEach(t=>t.stop());
+        
+        // Reset UI
+        document.getElementById('asm-audio-preview').classList.add('hidden');
+        document.getElementById('asm-audio-preview').src = "";
+    }
+</script>
+

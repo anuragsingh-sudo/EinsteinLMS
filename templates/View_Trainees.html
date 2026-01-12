@@ -1,0 +1,22 @@
+<div id="v_add_trainer" class="hidden fade-in">
+    <h2 style="font-size:28px; font-weight:700; color:var(--primary); margin-bottom:24px;">Invite New Trainer</h2>
+    
+    <div class="lms-card">
+        <div style="background:#eff6ff; color:#1e40af; padding:15px; border-radius:8px; margin-bottom:24px; font-size:14px; border:1px solid #dbeafe;">
+            ℹ️ <b>Note:</b> In this local version, this will just add them to the database. Email functionality requires an SMTP server setup.
+        </div>
+        
+        <div style="margin-bottom:20px;">
+            <label style="display:block; font-weight:600; margin-bottom:8px;">Trainer Full Name</label>
+            <input id="nt_name" class="lms-input" placeholder="e.g. John Doe">
+        </div>
+        
+        <div style="margin-bottom:20px;">
+            <label style="display:block; font-weight:600; margin-bottom:8px;">Email Address</label>
+            <input id="nt_email" class="lms-input" placeholder="e.g. john@example.com">
+        </div>
+        
+        <button class="lms-btn" onclick="inviteTrainer()">Send Invitation</button>
+    </div>
+</div>
+

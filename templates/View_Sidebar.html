@@ -1,0 +1,21 @@
+<div class="lms-sidebar">
+    <div style="font-size:24px; font-weight:800; margin-bottom:40px; display:flex; align-items:center; gap:10px;">
+        🦉 Einstein<span style="color:#60a5fa;">360</span>
+    </div>
+    
+    <div class="nav-item active" onclick="nav('dash',this)"><span>🏠</span> Dashboard</div>
+    <div class="nav-item" onclick="nav('create',this)"><span>📚</span> Create Batch</div>
+    <div class="nav-item" onclick="nav('att',this)"><span>📅</span> Attendance</div>
+    
+    <div class="nav-item" onclick="nav('users',this)"><span>👥</span> Trainees</div>
+    <div class="nav-item" onclick="nav('reviews',this)"><span>📝</span> Grading</div>
+    
+    <div id="nav-add-trainer" class="nav-item hidden" onclick="nav('add_trainer',this)"><span>👤</span> Add Trainer</div>
+    
+    <div style="margin-top:auto; padding-top:20px; border-top:1px solid rgba(255,255,255,0.1);">
+        <div style="font-weight:600;" id="u_name">User Name</div>
+        <div style="font-size:13px; opacity:0.6;" id="u_role">Role</div>
+        <button onclick="location.reload()" style="margin-top:15px; background:rgba(239,68,68,0.1); color:#fca5a5; border:none; padding:8px 12px; border-radius:8px; font-size:12px; cursor:pointer; width:100%; text-align:left;">Sign Out</button>
+    </div>
+</div>
+

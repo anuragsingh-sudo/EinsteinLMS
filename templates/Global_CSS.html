@@ -1,0 +1,38 @@
+<style>
+    :root {
+        --primary: #0f172a;    
+        --primary-light: #1e293b; 
+        --accent: #3b82f6;     
+        --bg: #f8fafc;         
+        --white: #ffffff;
+        --text: #334155;
+        --success: #10b981;
+        --danger: #ef4444;
+    }
+
+    .lms-body { margin:0; font-family:'Poppins', sans-serif; background:var(--bg); color:var(--text); height:100vh; display:flex; overflow:hidden; }
+    .hidden { display:none!important; } 
+    .fade-in { animation:fadeIn 0.4s cubic-bezier(0.4, 0, 0.2, 1); } 
+    @keyframes fadeIn{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}
+
+    /* SIDEBAR */
+    .lms-sidebar { width:280px; background:var(--primary); color:white; display:flex; flex-direction:column; padding:30px 20px; flex-shrink:0; z-index:10; }
+    .nav-item { padding:14px 18px; margin-bottom:8px; border-radius:12px; cursor:pointer; display:flex; gap:12px; align-items:center; color:#94a3b8; transition:all 0.2s; font-weight:500; border-left:4px solid transparent; }
+    .nav-item:hover { background:var(--primary-light); color:white; padding-left:22px; }
+    .nav-item.active { background:rgba(59,130,246,0.1); color:var(--accent); border-left-color:var(--accent); }
+
+    /* MAIN */
+    .lms-main { flex:1; padding:40px; overflow-y:auto; position:relative; }
+    
+    /* COMPONENTS */
+    .lms-card { background:var(--white); padding:30px; border-radius:20px; box-shadow:0 4px 6px -1px rgba(0,0,0,0.05); margin-bottom:30px; border:1px solid #e2e8f0; }
+    .lms-input { width:100%; padding:12px 16px; border:2px solid #e2e8f0; border-radius:10px; margin-bottom:15px; outline:none; transition:0.3s; box-sizing:border-box; background:#f8fafc; }
+    .lms-input:focus { border-color:var(--accent); background:white; }
+    .lms-btn { width:100%; padding:14px; background:var(--accent); color:white; border:none; border-radius:10px; cursor:pointer; font-weight:600; font-size:15px; }
+    .lms-btn:hover { background:#2563eb; }
+
+    /* TOAST */
+    #toast { visibility:hidden; min-width:300px; background:#1e293b; color:white; text-align:center; border-radius:10px; padding:16px; position:fixed; bottom:30px; right:30px; opacity:0; transition:0.4s; z-index:2000; border-left:5px solid var(--accent); }
+    #toast.show { visibility:visible; opacity:1; transform:translateY(0); }
+</style>
+
