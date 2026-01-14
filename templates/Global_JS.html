@@ -30,9 +30,12 @@
                         addSingleTrainee: async (data) => { onSuccess(await postData('/api/add_trainee', data)); },
                         getTraineeDetails: async (id) => { onSuccess(await postData('/api/get_trainee_details', {id})); },
                         
-                        // --- NEW: Assessment API Connections ---
+                        // --- Assessment API Connections ---
                         getTestSetupData: async (modIdx) => { onSuccess(await postData('/api/get_test_setup', {moduleIndex: modIdx})); },
-                        saveAssessmentResult: async (tId, tName, mNum, vData, aData) => { onSuccess(await postData('/api/save_assessment', {tId, tName, mNum, vData, aData})); }
+                        saveAssessmentResult: async (tId, tName, mNum, vData, aData) => { onSuccess(await postData('/api/save_assessment', {tId, tName, mNum, vData, aData})); },
+
+                        // --- MISSING FUNCTION RESTORED HERE ---
+                        inviteTrainer: async (data) => { onSuccess(await postData('/api/invite_trainer', data)); }
                     };
                 }
             }
@@ -73,7 +76,11 @@
     function nav(v, el) {
         if(el) { document.querySelectorAll('.nav-item').forEach(n=>n.classList.remove('active')); el.classList.add('active'); }
         document.querySelectorAll('.lms-main > div').forEach(d=>d.classList.add('hidden'));
-        const target = document.getElementById('v_'+v);
+        
+        // Handle specific view naming conventions
+        const targetId = (v === 'add_trainer') ? 'v_add_trainer' : 'v_' + v;
+        const target = document.getElementById(targetId);
+        
         if(target) target.classList.remove('hidden');
         
         if(v==='dash') loadDash();
@@ -96,7 +103,11 @@
         document.getElementById('appInterface').style.display='flex';
         document.getElementById('u_name').innerText = currUser.name;
         document.getElementById('u_role').innerText = currUser.role;
-        if(currUser.role === 'Owner') document.getElementById('nav-add-trainer').classList.remove('hidden');
+        
+        // Show Add Trainer only for Owners
+        if(currUser.role === 'Owner') {
+            document.getElementById('nav-add-trainer').classList.remove('hidden');
+        }
         nav('dash');
     }
 
@@ -225,8 +236,30 @@
     function loadAttList() { const bc = document.getElementById('a_sel').value; if(!bc) return; google.script.run.withSuccessHandler(l => { document.getElementById('a_list').innerHTML = l.map(t => `<div style="display:flex; justify-content:space-between; padding:12px; border-bottom:1px solid #eee;"><b>${t.name}</b><div><label style="margin-right:10px"><input type="radio" name="${t.id}" value="P" checked> P</label><label><input type="radio" name="${t.id}" value="A"> A</label></div></div>`).join(''); document.getElementById('a_btn').classList.remove('hidden'); }).getTraineesByBatch(bc); }
     function subAtt() { setLoading('a_btn', true); const r = Array.from(document.querySelectorAll('#a_list input:checked')).map(i => ({trainee_id:i.name, status:i.value})); google.script.run.withSuccessHandler(() => { toast("Saved!"); setLoading('a_btn', false); nav('dash'); }).saveAttendance({ batch_code:document.getElementById('a_sel').value, date:document.getElementById('a_date').value, records:r }); }
 
+    // --- NEW: INVITE TRAINER FUNCTION ---
+    function inviteTrainer() {
+        const name = document.getElementById('nt_name').value;
+        const email = document.getElementById('nt_email').value;
+        if(!name || !email) return toast("Name and Email required", true);
+        
+        // This button ID might not exist in HTML yet, so we safely ignore loading state if not found
+        const btn = document.querySelector('#v_add_trainer button');
+        if(btn) { btn.innerText = "Sending..."; btn.disabled = true; }
+        
+        const data = { name: name, email: email };
+        google.script.run.withSuccessHandler((r) => {
+            if(btn) { btn.innerText = "Send Invitation"; btn.disabled = false; }
+            if(r.status === 'success') {
+                toast("Trainer Invited!");
+                nav('dash'); // Redirect to dashboard
+            } else {
+                toast(r.message, true);
+            }
+        }).inviteTrainer(data);
+    }
+
     // ==========================================
-    // 3. ASSESSMENT LOGIC (RESTORED)
+    // 3. ASSESSMENT LOGIC
     // ==========================================
     let asmQ=[], asmIdx=0, micSt, camSt, medRec, audCh=[], audBl, camRec, camCh=[];
 
@@ -237,14 +270,11 @@
 
     async function checkPerms() {
         try {
-            // Request permissions
             camSt = await navigator.mediaDevices.getUserMedia({video:true});
             micSt = await navigator.mediaDevices.getUserMedia({audio:true});
             
-            // Show video feed
             const vidContainer = document.getElementById('video-container');
             if (vidContainer) vidContainer.classList.remove('hidden');
-            
             const vidElement = document.getElementById('video-feed');
             if (vidElement) vidElement.srcObject = camSt;
             
@@ -276,38 +306,22 @@
         const statusText = document.getElementById('rec-status-text');
         
         if(medRec && medRec.state==='recording') {
-            // STOP Recording
             medRec.stop();
-            btn.innerText = "🎤"; 
-            btn.style.background="#fee2e2"; 
-            btn.style.color="#ef4444"; 
-            btn.style.borderColor="#ef4444";
+            btn.innerText = "🎤"; btn.style.background="#fee2e2"; btn.style.color="#ef4444"; btn.style.borderColor="#ef4444";
             statusText.innerText = "Click to Re-Record";
         } else {
-            // START Recording
             audCh=[]; 
-            // Note: We record only audio here for the answer, 
-            // but we keep the camera running for proctoring (simulation)
             medRec = new MediaRecorder(micSt);
-            
             medRec.ondataavailable = e => audCh.push(e.data);
             medRec.onstop = () => {
                 audBl = new Blob(audCh, {type:'audio/webm'});
                 const p = document.getElementById('asm-audio-preview');
-                p.src = URL.createObjectURL(audBl); 
-                p.classList.remove('hidden');
-                
-                // Enable Submit
+                p.src = URL.createObjectURL(audBl); p.classList.remove('hidden');
                 const submitBtn = document.getElementById('asm-submit-btn');
-                submitBtn.disabled = false;
-                submitBtn.style.opacity = '1';
+                submitBtn.disabled = false; submitBtn.style.opacity = '1';
             };
             medRec.start();
-            
-            btn.innerText = "⏹"; 
-            btn.style.background="#dcfce7"; 
-            btn.style.color="#16a34a"; 
-            btn.style.borderColor="#16a34a";
+            btn.innerText = "⏹"; btn.style.background="#dcfce7"; btn.style.color="#16a34a"; btn.style.borderColor="#16a34a";
             statusText.innerText = "Recording...";
         }
     }
@@ -316,26 +330,22 @@
         const btn = document.getElementById('asm-submit-btn');
         btn.innerHTML = "Uploading..."; btn.disabled = true;
 
-        // Simulate video capture (proctoring snapshot)
         camCh=[]; 
         try {
             camRec = new MediaRecorder(camSt);
             camRec.ondataavailable = e => camCh.push(e.data);
             camRec.start();
-            setTimeout(() => camRec.stop(), 1000); // Record 1 second of video as 'proof'
+            setTimeout(() => camRec.stop(), 1000);
         } catch(e) { console.log("Video rec error", e); }
 
         setTimeout(() => {
-            // Prepare Data (Mocking Base64 conversion for this example)
             const reader = new FileReader();
             reader.readAsDataURL(audBl);
             reader.onloadend = () => {
                 const base64Audio = reader.result.split(',')[1];
-                
                 google.script.run.withSuccessHandler(() => {
                     toast("Uploaded Successfully!");
                     exitAssessment();
-                    // Refresh Profile
                     viewProfile(currTraineeId);
                     btn.innerText = "Submit & Upload";
                 }).saveAssessmentResult(
@@ -352,12 +362,8 @@
     function exitAssessment() {
         document.getElementById('v_assessment').classList.add('hidden');
         document.getElementById('video-container').classList.add('hidden');
-        
-        // Stop all streams
         if(camSt) camSt.getTracks().forEach(t=>t.stop());
         if(micSt) micSt.getTracks().forEach(t=>t.stop());
-        
-        // Reset UI
         document.getElementById('asm-audio-preview').classList.add('hidden');
         document.getElementById('asm-audio-preview').src = "";
     }

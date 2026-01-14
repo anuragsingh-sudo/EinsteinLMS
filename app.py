@@ -1,144 +1,220 @@
-# app.py
-from flask import Flask, render_template, request, jsonify, g
-import sqlite3
+import os
 import uuid
 import datetime
+import json
+from flask import Flask, render_template, request, jsonify
+
+# Import Google Cloud Libraries
+try:
+    from google.cloud import firestore
+    from google.cloud import secretmanager
+    from google.oauth2 import service_account
+except ImportError:
+    print("CRITICAL ERROR: Google Cloud libraries not found.")
+    print("Run: pip install google-cloud-firestore google-cloud-secret-manager")
+    exit(1)
 
 app = Flask(__name__)
-DB_FILE = 'lms_database.db'
 
-# --- Database Connection Management ---
-def get_db():
-    db = getattr(g, '_database', None)
-    if db is None:
-        db = g._database = sqlite3.connect(DB_FILE)
-        db.row_factory = sqlite3.Row # Access columns by name
-    return db
+SECRET_RESOURCE_ID = "projects/648176215467/secrets/vega-service-key/versions/1"
 
-@app.teardown_appcontext
-def close_connection(exception):
-    db = getattr(g, '_database', None)
-    if db is not None:
-        db.close()
-
-def init_db():
-    """Creates the database tables automatically on first run."""
-    with app.app_context():
-        db = get_db()
-        # Users Table
-        db.execute('''CREATE TABLE IF NOT EXISTS Users 
-                     (id TEXT PRIMARY KEY, name TEXT, email TEXT, password TEXT, role TEXT, timestamp TEXT)''')
-        # Batches Table
-        db.execute('''CREATE TABLE IF NOT EXISTS Batches 
-                     (code TEXT PRIMARY KEY, name TEXT, trainer_id TEXT, start_date TEXT, end_date TEXT, max_capacity INTEGER)''')
-        # Trainees Table
-        db.execute('''CREATE TABLE IF NOT EXISTS Trainees 
-                     (id TEXT PRIMARY KEY, batch_code TEXT, name TEXT, mobile TEXT, email TEXT)''')
-        # Attendance Table
-        db.execute('''CREATE TABLE IF NOT EXISTS Attendance 
-                     (id TEXT PRIMARY KEY, batch_code TEXT, trainee_id TEXT, date TEXT, status TEXT)''')
+def get_db_connection():
+    """
+    Attempts to fetch credentials from Secret Manager and connect to Firestore.
+    """
+    try:
+    
+        sm_client = secretmanager.SecretManagerServiceClient()
         
-        # Create Default Owner Account (Email: admin@lms.com / Pass: 12345)
-        try:
-            db.execute("INSERT INTO Users (id, name, email, password, role) VALUES (?, ?, ?, ?, ?)",
-                       ('USR-OWNER', 'Admin', 'admin@lms.com', '12345', 'Owner'))
-            db.commit()
-        except sqlite3.IntegrityError:
-            pass # Already exists
+        print(f"🔐 Fetching credentials from Secret Manager...")
+        response = sm_client.access_secret_version(request={"name": SECRET_RESOURCE_ID})
+        
+        # 2. Parse the Secret Payload (JSON Key)
+        secret_payload = response.payload.data.decode("UTF-8")
+        service_account_info = json.loads(secret_payload)
+        
+        # 3. Create Credentials object from the JSON info
+        creds = service_account.Credentials.from_service_account_info(service_account_info)
+        
+        # 4. Connect to Firestore using these credentials
+        db_client = firestore.Client(credentials=creds)
+        print("✅ Successfully connected to Firestore using Secret Key.")
+        return db_client
 
-# --- Page Routes ---
+    except Exception as e:
+        print(f"⚠️ Secret Manager Connection Failed: {e}")
+        print("Falling back to Default Credentials (Cloud Run default)...")
+        try:
+            # Fallback for Cloud Run if Secret Manager fails or permissions missing
+            return firestore.Client()
+        except Exception as e2:
+            print(f"❌ Critical DB Error: {e2}")
+            return None
+
+# Initialize DB
+db = get_db_connection()
+
+# --- Firestore Helpers ---
+def get_all(collection, filters=None):
+    if not db: return []
+    ref = db.collection(collection)
+    if filters:
+        for key, op, val in filters:
+            ref = ref.where(filter=firestore.FieldFilter(key, op, val))
+    docs = ref.stream()
+    return [{**doc.to_dict(), 'id': doc.id} for doc in docs]
+
+def get_doc(collection, doc_id):
+    if not db: return None
+    doc = db.collection(collection).document(str(doc_id)).get()
+    if doc.exists:
+        data = doc.to_dict()
+        data['id'] = doc.id
+        return data
+    return None
+
+def add_doc(collection, doc_id, data):
+    if not db: return
+    db.collection(collection).document(str(doc_id)).set(data)
+
+# ==========================================
+# 2. ROUTES
+# ==========================================
+
 @app.route('/')
 def index():
-    # Passes 'mode' and 'email' to HTML just like GAS did
-    mode = request.args.get('mode', 'login')
-    email = request.args.get('email', '')
-    return render_template('Index.html', mode=mode, inviteEmail=email)
-
-# --- API Routes (Replacing google.script.run) ---
+    return render_template('Index.html', mode=request.args.get('mode', 'login'), inviteEmail=request.args.get('email', ''))
 
 @app.route('/api/login', methods=['POST'])
 def login():
     data = request.json
-    db = get_db()
-    cur = db.execute("SELECT * FROM Users WHERE lower(email) = ?", (data['email'].lower(),))
-    user = cur.fetchone()
+    users = get_all('Users', [('email', '==', data['email'])])
     
-    if user:
-        if user['password'] == 'PENDING_SETUP':
+    if users:
+        u = users[0]
+        if u.get('password') == 'PENDING_SETUP': 
             return jsonify({'status': 'error', 'message': 'Account pending setup.'})
-        if str(user['password']) == str(data['password']):
-            return jsonify({'status': 'success', 'user': {'id': user['id'], 'name': user['name'], 'role': user['role']}})
-    
+        if str(u.get('password')) == str(data['password']): 
+            return jsonify({'status': 'success', 'user': {'id': u['id'], 'name': u['name'], 'role': u['role']}})
+            
     return jsonify({'status': 'error', 'message': 'Invalid Credentials'})
 
 @app.route('/api/get_batches', methods=['POST'])
 def get_batches():
-    data = request.json
-    user_id = data.get('userId')
-    role = data.get('role')
-    
-    db = get_db()
-    if role == 'Owner':
-        cur = db.execute("SELECT * FROM Batches")
+    d = request.json
+    if d.get('role') == 'Owner':
+        batches = get_all('Batches')
     else:
-        cur = db.execute("SELECT * FROM Batches WHERE trainer_id = ?", (user_id,))
-    
-    rows = cur.fetchall()
-    # Format dates for frontend
-    result = [{'code': r['code'], 'name': r['name'], 'start': r['start_date']} for r in rows]
-    return jsonify(result)
-
-@app.route('/api/get_trainers', methods=['GET'])
-def get_trainers():
-    db = get_db()
-    cur = db.execute("SELECT id, name FROM Users WHERE role = 'Trainer'")
-    rows = cur.fetchall()
-    return jsonify([{'id': r['id'], 'name': r['name']} for r in rows])
+        batches = get_all('Batches', [('trainer_id', '==', d.get('userId'))])
+    return jsonify(batches)
 
 @app.route('/api/create_batch', methods=['POST'])
 def create_batch():
-    data = request.json
-    db = get_db()
+    d = request.json
+    add_doc('Batches', d['batch_code'], {
+        'code': d['batch_code'], 'name': d['batch_name'], 
+        'trainer_id': d['trainer_id'], 'start_date': d['start_date'], 
+        'end_date': d['end_date'], 'max_capacity': d['max_capacity']
+    })
+    if d.get('trainees'):
+        for t in d['trainees']:
+            tid = 'TR-' + str(uuid.uuid4())[:8]
+            add_doc('Trainees', tid, {'id': tid, 'batch_code': d['batch_code'], 'name': t['name'], 'mobile': t['mobile'], 'email': ''})
+    return jsonify({'status': 'success'})
+
+@app.route('/api/get_trainers', methods=['GET'])
+def get_trainers():
+    return jsonify([{'id': t['id'], 'name': t['name']} for t in get_all('Users', [('role', '==', 'Trainer')])])
+
+@app.route('/api/invite_trainer', methods=['POST'])
+def invite_trainer():
+    d = request.json
+    existing = get_all('Users', [('email', '==', d['email'])])
+    if existing: return jsonify({'status': 'error', 'message': 'Email exists'})
     
-    # 1. Insert Batch
-    db.execute("INSERT INTO Batches (code, name, trainer_id, start_date, end_date, max_capacity) VALUES (?,?,?,?,?,?)",
-               (data['batch_code'], data['batch_name'], data['trainer_id'], data['start_date'], data['end_date'], data['max_capacity']))
-    
-    # 2. Insert Trainees
-    if data.get('trainees'):
-        for t in data['trainees']:
-            t_id = 'TR-' + str(uuid.uuid4())[:8]
-            db.execute("INSERT INTO Trainees (id, batch_code, name, mobile, email) VALUES (?,?,?,?,?)",
-                       (t_id, data['batch_code'], t['name'], t['mobile'], ''))
-    
-    db.commit()
+    uid = 'USR-' + str(uuid.uuid4())[:8]
+    add_doc('Users', uid, {'id': uid, 'name': d['name'], 'email': d['email'], 'password': '12345', 'role': 'Trainer'})
     return jsonify({'status': 'success'})
 
 @app.route('/api/get_trainees', methods=['POST'])
 def get_trainees():
-    batch_code = request.json.get('batchCode')
-    db = get_db()
-    cur = db.execute("SELECT * FROM Trainees WHERE batch_code = ?", (batch_code,))
-    rows = cur.fetchall()
-    return jsonify([{'id': r['id'], 'name': r['name'], 'mobile': r['mobile']} for r in rows])
+    return jsonify(get_all('Trainees', [('batch_code', '==', request.json.get('batchCode'))]))
+
+@app.route('/api/add_trainee', methods=['POST'])
+def add_trainee():
+    d = request.json
+    batch = get_doc('Batches', d['batchCode'])
+    if not batch: return jsonify({'status': 'error'})
+    
+    tid = 'TR-' + str(uuid.uuid4())[:8]
+    add_doc('Trainees', tid, {'id': tid, 'batch_code': d['batchCode'], 'name': d['name'], 'mobile': d['mobile'], 'email': d['email']})
+    return jsonify({'status': 'success'})
 
 @app.route('/api/save_attendance', methods=['POST'])
 def save_attendance():
-    data = request.json
-    db = get_db()
-    for rec in data['records']:
-        att_id = str(uuid.uuid4())
-        db.execute("INSERT INTO Attendance (id, batch_code, trainee_id, date, status) VALUES (?,?,?,?,?)",
-                   (att_id, data['batch_code'], rec['trainee_id'], data['date'], rec['status']))
-    db.commit()
+    d = request.json
+    for r in d['records']:
+        aid = str(uuid.uuid4())
+        add_doc('Attendance', aid, {'id': aid, 'batch_code': d['batch_code'], 'trainee_id': r['trainee_id'], 'date': d['date'], 'status': r['status']})
     return jsonify({'status': 'success'})
 
+@app.route('/api/get_trainee_details', methods=['POST'])
+def get_details():
+    tid = request.json.get('id')
+    t = get_doc('Trainees', tid)
+    if not t: return jsonify({'status': 'error', 'message': 'Not found'})
+    
+    all_att = get_all('Attendance', [('trainee_id', '==', tid)])
+    total = len(all_att)
+    present = len([x for x in all_att if x['status'] == 'P'])
+    pct = round((present/total*100)) if total else 0
+    
+    modules = {
+        '1': {'score': 'Pending', 'attempts': 0},
+        '2': {'score': 'Pending', 'attempts': 0},
+        '3': {'score': 'Pending', 'attempts': 0}
+    }
+    
+    results = get_all('Results', [('trainee_id', '==', tid)])
+    for r in results:
+        mn = str(r['module_num'])
+        if mn in modules:
+            modules[mn]['score'] = r.get('score', 'Submitted')
+            modules[mn]['attempts'] += 1
+            
+    curriculum = [
+        {'name': 'Semester 1', 'modules': [1, 2]},
+        {'name': 'Semester 2', 'modules': [3]}
+    ]
+
+    return jsonify({
+        'status': 'success',
+        'info': t,
+        'stats': {'percentage': pct},
+        'modules': modules,
+        'curriculum': curriculum
+    })
+
+@app.route('/api/get_test_setup', methods=['POST'])
+def get_test(): return jsonify({'questions': [{'question': 'Describe the core concepts.'}]})
+
+@app.route('/api/save_assessment', methods=['POST'])
+def save_asm():
+    d = request.json
+    rid = str(uuid.uuid4())
+    add_doc('Results', rid, {
+        'id': rid, 'trainee_id': d['tId'], 'trainee_name': d['tName'], 
+        'module_num': d['mNum'], 'video_link': 'mock_vid', 'audio_link': 'mock_aud', 
+        'score': 'Pending', 'timestamp': str(datetime.datetime.now())
+    })
+    return jsonify({'status': 'success'})
+
+@app.route('/_init_db')
+def init_db():
+    add_doc('Users', 'USR-OWNER', {'id': 'USR-OWNER', 'name': 'Admin', 'email': 'admin@lms.com', 'password': '12345', 'role': 'Owner'})
+    return "DB Initialized"
+
 if __name__ == '__main__':
-    init_db()
-    print("----------------------------------------------------------------")
-    print(" SERVER STARTED.")
-    print(" 1. Open Browser to: http://127.0.0.1:5000")
-    print(" 2. Login with: admin@lms.com  |  Password: 12345")
-    print("----------------------------------------------------------------")
+    print(f"Connecting to Secret Manager: {SECRET_RESOURCE_ID}")
     app.run(debug=True, port=5000)
 
