@@ -1,7 +1,5 @@
 <script>
-    // ==========================================
-    // 1. API BRIDGE
-    // ==========================================
+    
     async function postData(url, data) {
         try {
             const response = await fetch(url, {
@@ -42,9 +40,7 @@
         }
     };
 
-    // ==========================================
-    // 2. MAIN APP LOGIC
-    // ==========================================
+    
     const initMode = window.SERVER_MODE; 
     const initEmail = window.SERVER_EMAIL;
     let currUser = null, currTraineeId = null, currModIndex = null, currentBatchForAdd = null;
